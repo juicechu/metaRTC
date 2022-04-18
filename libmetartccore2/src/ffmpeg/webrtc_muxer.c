@@ -1,6 +1,4 @@
-//
-// Copyright (c) 2019-2022 yanggaofeng
-//
+
 
 #include "avformat.h"
 
@@ -33,12 +31,13 @@ typedef struct WEBRTCContext {
 
     YangFrame video_frame;
     YangFrame audio_frame;
-  
+
     int  log_offset;
     int  error_code;
 
     char *server_address;
     int min_delay_ms;
+    int nalu_offset;
 	int time_base_den;
 	int is_started;
 	int dump_file;
@@ -58,7 +57,7 @@ static void g_ff_rtc_setPlayMediaConfig(YangAudioParam *remote_audio,YangVideoPa
 
 static void g_ff_rtc_sendRequest(int32_t puid,uint32_t ssrc,YangRequestType req,void* user){
 	if(user==NULL) return;
-	
+
 		 WEBRTCContext *s = (WEBRTCContext*)user;
 		  AVFormatContext *h = s->avctx;
 	 if(req==Yang_Req_Connected){
@@ -73,12 +72,12 @@ static void g_ff_rtc_sendRequest(int32_t puid,uint32_t ssrc,YangRequestType req,
 static void g_ff_rtc_receiveAudio(YangFrame *audioFrame,void* user){
 	if(user==NULL) return;
 	 WEBRTCContext *s = (WEBRTCContext*)user;
-	
+
 }
 static void g_ff_rtc_receiveVideo(YangFrame *videoFrame,void* user){
 	if(user==NULL) return;
 
-	
+
 
 }
 static int packet_queue_wait_start( WEBRTCContext *s, int64_t timeout) {
@@ -97,11 +96,11 @@ static int packet_queue_wait_start( WEBRTCContext *s, int64_t timeout) {
                     .tv_nsec = (t % 1000000) * 1000 };
 
             pthread_cond_timedwait(&s->condition, &s->mutex, &tv);
-     
+
         }
         started = s->is_started;
         pthread_mutex_unlock(&s->mutex);
-   
+
         if (started)
             return 0;
     }
@@ -116,16 +115,17 @@ static int webrtc_open(AVFormatContext *h, const char *uri)
 {
     WEBRTCContext *s = h->priv_data;
     av_log(h, AV_LOG_INFO, "webrtc_open %s\n", uri);
+    av_log(h, AV_LOG_INFO, "webrtc_av_option nalu_offset=%d\n", s->nalu_offset);
 	s->video_stream_index=-1;
     s->audio_stream_index=-1;
-    
+
 
     s->video_codec = AV_CODEC_ID_H264;
     s->audio_codec = AV_CODEC_ID_OPUS;
-    
 
-	
-    if (!av_strstart(uri, "webrtc://", NULL))  {     
+
+
+    if (!av_strstart(uri, "webrtc://", NULL))  {
         return AVERROR(EINVAL);
     }
 
@@ -139,7 +139,7 @@ static int webrtc_open(AVFormatContext *h, const char *uri)
     callback.setPlayMediaConfig=g_ff_rtc_setPlayMediaConfig;
     callback.receiveAudio=g_ff_rtc_receiveAudio;
     callback.receiveVideo=g_ff_rtc_receiveVideo;
- 
+
 
 	if(s->handle->init) s->handle->init(s->handle->context,&callback,s);
     if(s->handle->initParam) s->handle->initParam(s->handle->context,uri,Yang_Stream_Publish);
@@ -159,7 +159,7 @@ static int webrtc_close(AVFormatContext *h)
     WEBRTCContext *s = h->priv_data;
     av_free(s->extradata);
 
-  
+
 
     yang_destroy_metaConnection(s->handle);
     yang_free(s->handle);
@@ -199,7 +199,7 @@ static int webrtc_write_header(AVFormatContext *s)
     int ret;
 
     av_log(s, AV_LOG_INFO, "webrtc_write_header, filename %s\n", s->filename);
- 
+
     // 5秒收不到数据，超时退出
     ret = packet_queue_wait_start( h, INT64_C(1000) * 5000);
     if (ret) {
@@ -223,34 +223,44 @@ static int webrtc_write_packet(AVFormatContext *h, AVPacket *pkt)
 	if(pkt==NULL) return 0;
     WEBRTCContext *s = h->priv_data;
     YangMetaConnection* metaconn=s->handle;
-   
+
 	int ret=0;
 	if(s->video_stream_index==-1||s->audio_stream_index==-1){
-		
+
 		for(int i=0;i<h->nb_streams;i++){
 			AVStream* st = h->streams[i];
-			
-			if(st->codecpar->codec_id ==AV_CODEC_ID_H264) {
-				s->video_stream_index=st->index;	
+
+            if(st->codecpar->codec_id == AV_CODEC_ID_H264) {
+				s->video_stream_index=st->index;
 				s->time_base_den=st->time_base.den;
-			
+
 				if(st->codecpar->extradata){
-					metaconn->setExtradata(metaconn->context,Yang_VED_264,(uint8_t*)st->codecpar->extradata,st->codecpar->extradata_size);					
-				}			
+					metaconn->setExtradata(metaconn->context,Yang_VED_264,(uint8_t*)st->codecpar->extradata,st->codecpar->extradata_size);
+				}
+            } else if(st->codecpar->codec_id == AV_CODEC_ID_OPUS)  {
+                s->audio_stream_index=st->index;
 			}
-			if(st->codecpar->codec_id == AV_CODEC_ID_OPUS) s->audio_stream_index=st->index;
 		}
-	
+
 	}
 
-		
-		
+
+
 	if(pkt->stream_index==s->video_stream_index){
-		//if(get_videodata_start(pkt->data)) return ret;	
-		s->video_frame.nb=pkt->size;
-		s->video_frame.payload=pkt->data;
+        if (pkt->pts == AV_NOPTS_VALUE) {
+            av_log(s, AV_LOG_ERROR, "Packet is missing PTS\n");
+            return AVERROR(EINVAL);
+        }
+		//if(get_videodata_start(pkt->data)) return ret;
+        if (s->nalu_offset > 0) {
+            s->video_frame.nb=pkt->size-s->nalu_offset;
+            s->video_frame.payload=pkt->data+s->nalu_offset;
+        } else {
+            s->video_frame.nb=pkt->size;
+            s->video_frame.payload=pkt->data;
+        }
 		s->video_frame.pts=pkt->pts*1000000/s->time_base_den;
-	
+
 		 ret=metaconn->publishVideo(metaconn->context,&s->video_frame);
 	}else if(pkt->stream_index==s->audio_stream_index){
 		s->audio_frame.nb=pkt->size;
@@ -260,7 +270,7 @@ static int webrtc_write_packet(AVFormatContext *h, AVPacket *pkt)
 	}
 
 	return ret;
-	
+
 }
 
 static int webrtc_write_close(AVFormatContext *s)
@@ -279,6 +289,7 @@ static const AVOption options[] = {
     { "webrtc_dump_file", "Dump video and audio raw data to file", OFFSET(dump_file), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
     { "webrtc_server_address", "Webrtc server address", OFFSET(server_address), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D },
     { "webrtc_min_delay", "the duration of the data to be sent for the first rollback GOP", OFFSET(min_delay_ms), AV_OPT_TYPE_INT, { .i64 = 1000 }, -1, INT_MAX, D },
+    { "webrtc_nalu_offset", "set nalu offset in order to fix some camera h264 data", OFFSET(nalu_offset), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, D },
     { NULL }
 };
 static const AVClass webrtc_muxer_class = {
