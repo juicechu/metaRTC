@@ -23,6 +23,12 @@ void yang_find_start_code(YangVideoCodec pve,uint8_t *buf,int32_t bufLen,int32_t
 	   }
    }
    while (i <bufLen-3) {
+       // recognize 00 00 01 nalu
+       if (buf[i] == 0 && buf[i + 1] == 0 &&buf[i + 2] == 1) {
+           *spsPos=i+3;
+           i+=3;
+           break;
+       }
        if (buf[i] == 0 && buf[i + 1] == 0 &&buf[i + 2] == 0&& buf[i + 3] == 1){
     	   if(pve==Yang_VED_265) *vpsLen=i-4;
        	*spsPos=i+4;
