@@ -90,20 +90,22 @@ void g_yang_mt_setExtradata(void* peer,YangVideoCodec codec,uint8_t *extradata,i
 	int32_t spsLen = 0, ppsLen = 0;
 	yang_find_start_code(codec, extradata, extradata_size, &vpsPos, &vpsLen,
 			&spsPos, &spsLen, &ppsPos, &ppsLen);
-	uint8_t tmp[1024];
-	int32_t len=0;
-	YangSample sps,pps;
-	sps.bytes=(char*)extradata + spsPos;
-	sps.nb=spsLen;
-	pps.bytes=(char*)extradata+ppsPos;
-	pps.nb=ppsLen;
-	yang_getConfig_Meta_H264(&sps,&pps,tmp,&len);
-	if(session->extradata.payload==NULL){
-		session->extradata.payload=(uint8_t*)malloc(len);
-		session->extradata.nb=len;
-		session->extradata.frametype=YANG_Frametype_Spspps;
-		memcpy(session->extradata.payload,tmp,len);
-	}
+    if (spsLen > 0) {
+        uint8_t tmp[1024];
+        int32_t len=0;
+        YangSample sps,pps;
+        sps.bytes=(char*)extradata + spsPos;
+        sps.nb=spsLen;
+        pps.bytes=(char*)extradata+ppsPos;
+        pps.nb=ppsLen;
+        yang_getConfig_Meta_H264(&sps,&pps,tmp,&len);
+        if(session->extradata.payload==NULL){
+            session->extradata.payload=(uint8_t*)malloc(len);
+            session->extradata.nb=len;
+            session->extradata.frametype=YANG_Frametype_Spspps;
+            memcpy(session->extradata.payload,tmp,len);
+        }
+    }
 }
 int32_t g_yang_mt_publishVideo(void* peer,YangFrame* videoFrame){
 	if(peer==NULL||videoFrame==NULL) return 1;
