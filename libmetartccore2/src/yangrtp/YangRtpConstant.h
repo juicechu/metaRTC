@@ -25,8 +25,8 @@ const int32_t kAudioPayloadType     = 111;
 const int32_t kAudioChannel         = 2;
 const int32_t kAudioSamplerate      = 48000;
 
-// Firefox defaults as 126, Chrome is 102.
-const int32_t kVideoPayloadType = 102;
+// Firefox defaults as 126, Chrome is 102. Android And iOS is 125
+const int32_t kVideoPayloadType = 125; //FIXME srs server should override payload type because of stun
 const int32_t kVideoSamplerate  = 90000;
 const int32_t kRtpMaxPayloadSize = kRtpPacketSize - 200;
 
@@ -62,7 +62,7 @@ const uint8_t kEnd              = 0x40; // Fu-header end bit
 #define  kRtcpPacketSize   		1500
 #define kRtpMaxPayloadSize      1300
 #define kAudioPayloadType       111
-#define kVideoPayloadType       102
+#define kVideoPayloadType       125
 #define kStapA   0x18
 #define kFuA     0x1c
 #define  kStart             0x80 // Fu-header start bit

@@ -127,35 +127,28 @@ int32_t g_yang_mt_publishVideo(void* peer,YangFrame* videoFrame){
 	session->preTimestamp = session->videoTimestamp;
 	videoFrame->pts=session->curVideotimestamp * 9 / 100;
 	videoFrame->dts=videoFrame->pts;
+    int isIDR = 0;
 	if(videoFrame->payload[0]==0x00&&videoFrame->payload[1]==0x00&&videoFrame->payload[2]==0x01){
-		if((videoFrame->payload[3]& kNalTypeMask) == YangAvcNaluTypeIDR){
-			session->extradata.pts=videoFrame->pts;
-			session->extradata.frametype=YANG_Frametype_Spspps;
-			yang_rtcsession_publishVideo(((YangMetaSession*) peer)->session,&session->extradata);
-
-			startLen=3;
-
-			videoFrame->frametype = YANG_Frametype_I;
-			goto sendframe;
-		}
+        isIDR = (videoFrame->payload[3]& kNalTypeMask) == YangAvcNaluTypeIDR;
+		startLen=3;
+    } else if (videoFrame->payload[0]==0x00&&videoFrame->payload[1]==0x00&&videoFrame->payload[2]==0x00&&videoFrame->payload[3]==0x01) {
+        isIDR = (videoFrame->payload[4]& kNalTypeMask) == YangAvcNaluTypeIDR;
 	}
+    /**
 	YangH264NaluData nalu;
 	memset(&nalu, 0, sizeof(YangH264NaluData));
 	yang_parseH264Nalu(videoFrame, &nalu);
-	if ((videoFrame->payload[4]& kNalTypeMask) == YangAvcNaluTypeIDR) {
-		session->extradata.pts=videoFrame->pts;
-		yang_rtcsession_publishVideo(((YangMetaSession*) peer)->session,&session->extradata);
+    **/
+    if(isIDR){
+        session->extradata.pts=videoFrame->pts;
+        session->extradata.frametype=YANG_Frametype_Spspps;
+        yang_rtcsession_publishVideo(((YangMetaSession*) peer)->session,&session->extradata);
 
-		videoFrame->frametype = YANG_Frametype_I;
-			goto sendframe;
-	} else {
-		videoFrame->frametype = YANG_Frametype_P;
-		goto sendframe;
+        videoFrame->frametype = YANG_Frametype_I;
+    } else {
+        videoFrame->frametype = YANG_Frametype_P;
+    }
 
-	}
-	return  1;
-
-	sendframe:
 	videoFrame->payload = videoFrame->payload+ startLen;
 	videoFrame->nb -=   startLen;
 	return yang_rtcsession_publishVideo(((YangMetaSession*) peer)->session,
