@@ -21,6 +21,7 @@ int32_t yang_filter_data(YangRtcDtls* dtls,uint8_t* data, int32_t size);
 
 
 int32_t yang_get_srtp_key(YangRtcDtls* dtls,char* recv_key, int *precvkeylen,char* send_key,int *psendkeylen);
+void state_trace(YangRtcDtls *dtls, uint8_t* data, int length, int incoming, int r0, int r1, int arq);
 #ifdef __cplusplus
 }
 #endif

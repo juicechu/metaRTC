@@ -45,6 +45,7 @@ typedef struct {
     YangUdpHandle* udp;
     YangSRtp* srtp;
     SSL_CTX* sslctx;
+    int nn_arq_packets;
 }YangRtcDtls;
 
 

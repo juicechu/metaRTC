@@ -82,6 +82,7 @@ int32_t yang_init_rtcdtls(YangRtcDtls *dtls) {
 	dtls->isStart = 0;
 	dtls->isLoop = 0;
 	dtls->state = YangDtlsStateInit;
+    dtls->nn_arq_packets = 0;
 
 	dtls->sslctx = yang_build_dtls_ctx(dtls, "actpass");
 
@@ -133,6 +134,16 @@ void yang_destroy_rtcdtls(YangRtcDtls *dtls) {
 
 #define YANG_UTIME_MILLISECONDS 1000
 int32_t yang_run_rtcdtls_app(YangRtcDtls *dtls) {
+    // sleep 1 second before yang_start_rtcdtls in order to wait some lowpower CPU handshake. eg. Raspberry Pi 3B+ BCM2837B0
+	yang_usleep(1000 * YANG_UTIME_MILLISECONDS);
+    yang_trace("\nDTLS yang_run_rtcdtls_app\n");
+    // Limit the max retry for ARQ, to avoid infinite loop.
+    // Note that we set the timeout to [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600, 51200] in ms,
+    // but the actual timeout is limit to 1s:
+    //      50ms, 100ms, 200ms, 400ms, 800ms, (1000ms,600ms), (200ms,1000ms,1000ms,1000ms),
+    //      (400ms,1000ms,1000ms,1000ms,1000ms,1000ms,1000ms), ...
+    // So when the max ARQ limit to 12 times, the max loop is about 103.
+    // @remark We change the max sleep to 100ms, so we limit about (103*10)/2=500.
 	dtls->isStart = 1;
 	int32_t err = Yang_Ok;
 	const int32_t max_loop = 512;
@@ -140,12 +151,14 @@ int32_t yang_run_rtcdtls_app(YangRtcDtls *dtls) {
 	int32_t arq_max_retry = 12 * 2;
 	for (int32_t i = 0; arq_count < arq_max_retry && i < max_loop; i++) {
 		if (dtls->handshake_done) {
+            yang_trace("\nDTLS handshake_done\n");
 			return err;
 		}
 
 		// For DTLS client ARQ, the state should be specified.
 		if (dtls->state != YangDtlsStateClientHello
 				&& dtls->state != YangDtlsStateClientCertificate) {
+            yang_trace("\nDTLS state not match %d\n", dtls->state);
 			return err;
 		}
 
@@ -156,6 +169,7 @@ int32_t yang_run_rtcdtls_app(YangRtcDtls *dtls) {
 		if ((r0 = DTLSv1_get_timeout(dtls->ssl, &to)) == 0) {
 			// No timeout, for example?, wait for a default 50ms.
 			yang_usleep(50 * YANG_UTIME_MILLISECONDS);
+            yang_trace("\nDTLS default sleep 50ms\n");
 			continue;
 		}
 		int64_t timeout = to.tv_sec + to.tv_usec;
@@ -164,6 +178,7 @@ int32_t yang_run_rtcdtls_app(YangRtcDtls *dtls) {
 			timeout = yang_min(100 * YANG_UTIME_MILLISECONDS, timeout);
 			timeout = yang_max(50 * YANG_UTIME_MILLISECONDS, timeout);
 			yang_usleep((unsigned int) timeout);
+            yang_trace("\nDTLS timeout sleep %dms\n", timeout / YANG_UTIME_MILLISECONDS);
 			continue;
 		}
 
@@ -177,6 +192,7 @@ int32_t yang_run_rtcdtls_app(YangRtcDtls *dtls) {
 		r0 = DTLSv1_handle_timeout(dtls->ssl);
 		r1 = SSL_get_error(dtls->ssl, r0);
 		if (r0 == 0) {
+            yang_trace("\nDTLS No timeout had expired\n");
 			continue; // No timeout had expired.
 		}
 		if (r0 != 1) {
@@ -188,6 +204,8 @@ int32_t yang_run_rtcdtls_app(YangRtcDtls *dtls) {
 		uint8_t *data = NULL;
 		int32_t size = BIO_get_mem_data(dtls->bioOut, (char** )&data);
 		arq_count++;
+        dtls->nn_arq_packets++;
+        state_trace(dtls, (uint8_t*)data, size, false, r0, r1, true);
 		if (size
 				> 0&& (err = yang_rtc_sendData(dtls->udp,(char*)data, size)) != Yang_Ok) {
 			return yang_error_wrap(ERROR_RTC_DTLS, "error dtls send size=%u",
@@ -306,7 +324,30 @@ int32_t yang_on_handshake_done(YangRtcDtls *dtls) {
 
 	return err;
 }
+void state_trace(YangRtcDtls *dtls, uint8_t* data, int length, int incoming, int r0, int r1, int arq){
+    // change_cipher_spec(20), alert(21), handshake(22), application_data(23)
+    // @see https://tools.ietf.org/html/rfc2246#section-6.2.1
+    uint8_t content_type = 0;
+    if (length >= 1) {
+        content_type = (uint8_t)data[0];
+    }
+
+    uint16_t size = 0;
+    if (length >= 13) {
+        size = (uint16_t)(data[11])<<8 | (uint16_t)(data[12]);
+    }
+
+    uint8_t handshake_type = 0;
+    if (length >= 14) {
+        handshake_type = (uint8_t)data[13];
+    }
+
+    yang_trace("DTLS: State %s %s, done=%u, arq=%u/%u, r0=%d, r1=%d, len=%u, cnt=%u, size=%u, hs=%u\n",
+        "Active", (incoming? "RECV":"SEND"), dtls->handshake_done, arq,
+        dtls->nn_arq_packets, r0, r1, length, content_type, size, handshake_type);
+}
 int32_t yang_doHandshake(YangRtcDtls *dtls) {
+    yang_trace("\nDTLS yang_doHandshake\n");
 	if (dtls->handshake_done) {
 		return 0;
 	}
@@ -329,6 +370,8 @@ int32_t yang_doHandshake(YangRtcDtls *dtls) {
 	uint8_t *data = NULL;
 	int32_t size = BIO_get_mem_data(dtls->bioOut, (char** )&data);
 
+    state_trace(dtls, (uint8_t*)data, size, false, r0, r1, false);
+
 	yang_filter_data(dtls, data, size);
 
 	if (size > 0)
@@ -350,6 +393,7 @@ int32_t yang_startHandShake(YangRtcDtls *dtls) {
 	return Yang_Ok;
 }
 int32_t yang_decodeHandshake(YangRtcDtls *dtls, char *data, int32_t nb_data) {
+    yang_trace("\nDTLS yang_decodeHandshake\n");
 	int32_t r0 = 0;
 
 	if ((r0 = BIO_reset(dtls->bioIn)) != 1) {
@@ -364,7 +408,7 @@ int32_t yang_decodeHandshake(YangRtcDtls *dtls, char *data, int32_t nb_data) {
 	}
 
 	// Trace the detail of DTLS packet.
-
+    state_trace(dtls, (uint8_t*)data, nb_data, true, r0, SSL_ERROR_NONE, false);
 	if ((r0 = BIO_write(dtls->bioIn, data, nb_data)) <= 0) {
 
 		printf("\nERROR_OpenSslBIOWrite, BIO_write r0=%d", r0);
@@ -388,6 +432,7 @@ int32_t yang_decodeHandshake(YangRtcDtls *dtls, char *data, int32_t nb_data) {
 
 			uint8_t *data = NULL;
 			int32_t size = BIO_get_mem_data(dtls->bioOut, (char** )&data);
+            state_trace(dtls, (uint8_t*)data, size, false, r0, r1, false);
 			if (size > 0 && dtls->udp)
 				yang_rtc_sendData(dtls->udp, (char*) data, size);
 			continue;
@@ -398,6 +443,7 @@ int32_t yang_decodeHandshake(YangRtcDtls *dtls, char *data, int32_t nb_data) {
 	return Yang_Ok;
 }
 int32_t yang_sendDtlsAlert(YangRtcDtls *dtls) {
+    yang_trace("\nDTLS yang_sendDtlsAlert\n");
 	if (!dtls)
 		return 1;
 	int32_t r0 = SSL_shutdown(dtls->ssl);
@@ -412,6 +458,7 @@ int32_t yang_sendDtlsAlert(YangRtcDtls *dtls) {
 
 	uint8_t *data = NULL;
 	int32_t size = BIO_get_mem_data(dtls->bioOut, (char** )&data);
+    state_trace(dtls, (uint8_t*)data, size, false, r0, r1, false);
 	if (size > 0 && dtls->udp)
 		yang_rtc_sendData(dtls->udp, (char*) data, size);
 
