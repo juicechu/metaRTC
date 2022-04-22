@@ -253,6 +253,7 @@ static int webrtc_write_packet(AVFormatContext *h, AVPacket *pkt)
         }
 		//if(get_videodata_start(pkt->data)) return ret;
         if (s->nalu_offset > 0) {
+            // some h264 camera contain spp and pps in per nalu, so it need to be trim
             s->video_frame.nb=pkt->size-s->nalu_offset;
             s->video_frame.payload=pkt->data+s->nalu_offset;
         } else {
