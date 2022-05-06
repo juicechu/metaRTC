@@ -54,6 +54,7 @@ typedef struct {
     YangSRtp* srtp;
     SSL_CTX* sslctx;
     YangSslCallback* sslCallback;
+    int nn_arq_packets;
 
 }YangRtcDtls;
 #endif

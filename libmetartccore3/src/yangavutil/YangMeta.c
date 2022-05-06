@@ -23,6 +23,12 @@ void yang_find_start_code(YangVideoCodec pve,uint8_t *buf,int32_t bufLen,int32_t
 	   }
    }
    while (i <bufLen-3) {
+       // recognize 00 00 01 nalu
+       if (buf[i] == 0 && buf[i + 1] == 0 &&buf[i + 2] == 1) {
+           *spsPos=i+3;
+           i+=3;
+           break;
+       }
        if (buf[i] == 0 && buf[i + 1] == 0 &&buf[i + 2] == 0&& buf[i + 3] == 1){
     	   if(pve==Yang_VED_265) *vpsLen=i-4;
        	*spsPos=i+4;
@@ -386,10 +392,10 @@ void yang_getH264RtmpHeader(uint8_t *buf, uint8_t *src, int32_t *hLen) {
 }
 
 void yang_decodeMetaH264(uint8_t *buf,int32_t p_configLen, YangSample* sps, YangSample* pps){
-	sps->nb= *(buf + 12) + 1;
+    sps->nb= *(buf + 12);
 	sps->bytes = (char*)buf + 13;
-	pps->nb = *(sps->bytes + sps->nb + 1) + 1;
-	pps->bytes= (char*)buf + 13 + sps->nb + 2;
+	pps->nb = *(sps->bytes + sps->nb + 2);
+	pps->bytes= (char*)buf + 13 + sps->nb + 3;
 }
 void yang_decodeMetaH265(uint8_t *meta,int32_t p_configLen, YangSample* vps, YangSample* sps, YangSample* pps){
 	vps->nb=*(meta+32);
